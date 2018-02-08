@@ -1,0 +1,334 @@
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Scanner;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import akka.actor.ActorRef;
+import akka.actor.ActorSystem;
+import akka.actor.Inbox;
+import akka.actor.Props;
+import akka.actor.UntypedActor;
+import scala.concurrent.duration.Duration;
+
+public class StableMarriagePro {
+
+	public static abstract class Person extends UntypedActor{
+		List<ActorRef> preferencelist;
+		List<ActorRef> testlist;
+		ActorRef currentmatch;
+		protected void initial(ActorRef[] possibleSpouses){
+			this.preferencelist = new ArrayList<ActorRef>();
+			this.testlist = new ArrayList<ActorRef>();
+			this.preferencelist.addAll(Arrays.asList(possibleSpouses));
+			Collections.shuffle(this.preferencelist);
+			this.testlist.addAll(this.preferencelist);
+			this.currentmatch = null;
+		}
+		public String printpreferlist(){
+			String name = getSelf().path().name()+" preferenceList: ";
+			for (int a = 0; a < this.preferencelist.size(); a++)
+			{
+				name = name+this.preferencelist.get(a).path().name()+" ";
+			}
+			return name;
+		}
+	}
+	
+	public static class Man extends Person{
+		@Override
+		public void onReceive(Object message) throws Throwable {
+			if(message instanceof SetupMessage){
+				this.initial((ActorRef[])((SetupMessage)message).possibleSpouses);
+				getSender().tell(new ReadyMessage(), getSelf());
+			}else if (message instanceof StartMessage){
+				sendProposal();
+			}
+			else if (message instanceof AcceptanceMessage){
+				this.currentmatch = getSender();
+			}else if (message instanceof RejectionMessage){
+				sendProposal();
+			}else if (message instanceof AreYouMatchedMessage){
+				Boolean reply = new Boolean((this.currentmatch != null));
+				getSender().tell(reply, getSelf());
+			}else if (message instanceof WhosYourMatchAndPrefsMessage){
+				getSender().tell(new MatchAndPrefsMessage(this.currentmatch, this.testlist), getSelf());
+			}else{
+				unhandled(message);
+			}
+		}
+		public void sendProposal(){
+			if(preferencelist.isEmpty() == false){
+				ActorRef currentPref = preferencelist.get(0);
+				currentPref.tell(new ProposalMessage(), getSelf());
+				preferencelist.remove(0);
+			}
+		}
+	}
+
+	public static class Woman extends Person{
+		@Override
+		public void onReceive(Object message) throws Throwable {
+			if(message instanceof SetupMessage){
+				this.initial((ActorRef[])((SetupMessage)message).possibleSpouses);
+				getSender().tell(new ReadyMessage(), getSelf());
+			} else if (message instanceof ProposalMessage){
+				ActorRef one = getSender();
+				if(currentmatch == null){
+					acceptProposal(one);
+				}
+				else{
+					if(isCurrentPerferredOver(one)){
+						rejectProposal(one);
+					}else{
+						rejectProposal(this.currentmatch);
+						acceptProposal(one);
+					}
+				}	
+			}else if (message instanceof WhosYourMatchAndPrefsMessage){
+				getSender().tell(new MatchAndPrefsMessage(this.currentmatch, this.testlist), getSelf());
+			}else{
+				unhandled(message);
+			}
+		}
+		
+		public boolean isCurrentPerferredOver(ActorRef one){
+			int currentMatchIndex = preferencelist.indexOf(this.currentmatch);
+			int suitorIndex = preferencelist.indexOf(one);
+			if(currentMatchIndex < suitorIndex){
+				return true;
+			}else{
+				return false;
+			}
+		}
+		public void acceptProposal(ActorRef one){
+			this.currentmatch = one;
+			one.tell(new AcceptanceMessage(), getSelf());
+		}
+		public void rejectProposal(ActorRef one){
+			one.tell(new RejectionMessage(), getSelf());
+		}
+	}
+	public static class SetupMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+		ActorRef[] possibleSpouses;
+		public SetupMessage(ActorRef[] list){
+			this.possibleSpouses = list;
+		}
+	}
+	public static class ReadyMessage implements Serializable {
+		private static final long serialVersionUID = 1L;	
+	}
+	public static class ProposalMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+	}
+	public static class StartMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+	}
+	public static class RejectionMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+	}
+	public static class AcceptanceMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+	}
+	public static class AreYouMatchedMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+	}
+	public static class WhosYourMatchAndPrefsMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+	}
+	public static class MatchAndPrefsMessage implements Serializable{
+		private static final long serialVersionUID = 1L;
+		ActorRef match;
+		List<ActorRef> prefs;
+		public MatchAndPrefsMessage(ActorRef m, List<ActorRef> p ){
+			this.match = m;
+			this.prefs = p; 
+		}
+	}
+	public static class Match{
+		ActorRef man;
+		ActorRef woman;
+		List<ActorRef> manPrefs;
+		List<ActorRef> womanPrefs;
+		public Match(ActorRef m, ActorRef w,List<ActorRef> mp, List<ActorRef> wp){
+			this.man = m;
+			this.woman = w;
+			this.manPrefs = mp;
+			this.womanPrefs = wp;
+		}
+		
+		@Override
+		public String toString(){
+			String manName =man.path().name();
+			String womanName = woman.path().name();
+			return manName+" marries "+ womanName 
+					+ "\n"+prettyPrintList(manName,this.manPrefs)
+					+ "\n"+prettyPrintList(womanName, this.womanPrefs);
+		}
+		
+		private String prettyPrintList(String name, List<ActorRef> l){
+			String returnMess = name+" preferenceList: ";
+			for (int a = 0; a < l.size(); a++)
+			{
+				returnMess = returnMess+l.get(a).path().name()+", ";
+			}
+			return returnMess;
+		}
+		@Override
+		public boolean equals(Object other){
+		    if (other == null) return false;
+		    if (other == this) return true;
+		    if (!(other instanceof Match))return false;
+		    Match x = (Match)other;
+			return ((this.man.path().name() == x.man.path().name()) && (this.woman.path().name() == x.woman.path().name()));
+		}
+	}
+	public static int findIndexOf(ActorRef person, List<Match> matches){
+		for(int i = 0; i < matches.size(); i++)
+		{
+			Match m = matches.get(i);
+			if((person.path().name() == m.man.path().name()) || (person.path().name() == m.woman.path().name())){
+				return i;
+			}
+		}
+		return -1;
+	}
+	public static void main(String[] args) {
+		System.out.print("enter the number of the couple number: ");
+		Scanner in = new Scanner(System.in);
+		int couple = new Integer(in.nextInt());
+		in.close();
+		int TIMEOUT_DURATION_SEC = 3;
+		ActorRef[] men = new ActorRef[couple];
+		ActorRef[] women = new ActorRef[couple];
+		List<Match> menMatches = new ArrayList<Match>();
+		List<Match> womenMatches = new ArrayList<Match>();
+		final ActorSystem actorSystem = ActorSystem.create("actorSystem");
+		final Inbox client = Inbox.create(actorSystem);
+		for(int a = 0; a < couple; a++){
+			men[a] = actorSystem.actorOf(Props.create(Man.class), "man"+a);
+			women[a] = actorSystem.actorOf(Props.create(Woman.class), "woman"+a);
+		}
+		for(int a = 0; a < men.length; a++){
+			client.send(men[a], new SetupMessage(women.clone())); 
+			try {
+				client.receive(Duration.create(TIMEOUT_DURATION_SEC, TimeUnit.SECONDS));
+			}
+			catch(TimeoutException e){
+				System.out.println("timeout"+men[a].path().name());
+			}
+		}
+		for(int a = 0; a < women.length; a++){
+			client.send(women[a], new SetupMessage(men.clone())); 
+			try {
+				client.receive(Duration.create(TIMEOUT_DURATION_SEC, TimeUnit.SECONDS));
+			}
+			catch(TimeoutException e){
+				System.out.println("timeout");
+			}
+		}
+		for(int i = 0; i < couple; i++){
+			men[i].tell(new StartMessage(), ActorRef.noSender());
+		}
+		boolean Done = false;
+		while(Done == false)
+		{
+			Done = true;
+			for(int i = 0; i < men.length; i++){
+				client.send(men[i], new AreYouMatchedMessage());
+				Boolean reply = null;
+				try {
+					reply = (Boolean) client.receive(Duration.create(TIMEOUT_DURATION_SEC, TimeUnit.SECONDS));
+					if(reply == false){
+						Done = false;
+					}
+				}
+				catch(TimeoutException e){
+					System.out.println("timeout"+men[i]);
+				}
+			}
+		}
+
+		for(int i = 0; i < women.length; i++){
+			client.send(women[i], new WhosYourMatchAndPrefsMessage()); 
+			MatchAndPrefsMessage reply = null;
+			try {
+				reply = (MatchAndPrefsMessage) client.receive(Duration.create(TIMEOUT_DURATION_SEC, TimeUnit.SECONDS));
+				womenMatches.add(new Match(reply.match, women[i], null, reply.prefs));
+				}
+			catch(TimeoutException e){
+				System.out.println("timeout waiting for reply from woman: "+women[i]);
+			}
+		}
+		for(int i = 0; i < couple; i++){
+			client.send(men[i], new WhosYourMatchAndPrefsMessage()); 
+			MatchAndPrefsMessage reply = null;
+			try {
+				reply = (MatchAndPrefsMessage) client.receive(Duration.create(TIMEOUT_DURATION_SEC, TimeUnit.SECONDS));
+				menMatches.add(new Match(men[i], reply.match, reply.prefs, null));
+				}
+			catch(TimeoutException e){
+				System.out.println("timeout waiting for reply from man: "+men[i]);
+			}
+		}
+
+		boolean test1Successful = true;
+		for(int i = 0; i < menMatches.size(); i++){
+			Match currentMatch = menMatches.get(i);
+			if(womenMatches.contains(currentMatch) == false){
+				System.out.println("Test 1 Failure - bad MATCH: "+currentMatch);
+				test1Successful = false;
+			}
+		}
+
+		List<Match> masterMatches = new ArrayList<Match>();
+		for(int i = 0; i < menMatches.size(); i++){
+			Match currentMatch = menMatches.get(i);
+			int womenIndex = womenMatches.indexOf(currentMatch); 
+			masterMatches.add(new Match(currentMatch.man, currentMatch.woman, currentMatch.manPrefs, womenMatches.get(womenIndex).womanPrefs));
+			System.out.println(masterMatches.get(i));
+		}
+
+		boolean test2Successful = true;
+		for(int i = 0; i < masterMatches.size(); i++){
+			List<ActorRef> myPrefList = masterMatches.get(i).manPrefs;
+			String wifeName = masterMatches.get(i).woman.path().name();
+			for(int f = 0; f < myPrefList.size(); f++){
+				ActorRef testWoman = myPrefList.get(f);
+				if(testWoman.path().name() == wifeName){
+					break;
+				}
+				int x = findIndexOf(testWoman, masterMatches);
+				Match testWomansMatch = masterMatches.get(x);
+				int herManIndex = testWomansMatch.womanPrefs.indexOf(testWomansMatch.man);
+				int meIndex = testWomansMatch.womanPrefs.indexOf(masterMatches.get(i).man);
+				if(meIndex < herManIndex){	
+					System.out.println("Unstable Matches Found: "+ masterMatches.get(i) +"\n and \n"+ testWomansMatch );
+					test2Successful = false;
+				}
+			}
+		}
+		for(int i = 0; i < couple; i++){
+			List<ActorRef> myPrefList = masterMatches.get(i).womanPrefs;
+			String husbandName = masterMatches.get(i).man.path().name();
+			for(int f = 0; f < myPrefList.size(); f++){
+				ActorRef testMan = myPrefList.get(f);
+				if(testMan.path().name() == husbandName){
+					break;
+				}
+				int x = findIndexOf(testMan, masterMatches);
+				Match testMansMatch = masterMatches.get(x);
+				int hisWifeIndex = testMansMatch.manPrefs.indexOf(testMansMatch.woman);
+				int meIndex = testMansMatch.manPrefs.indexOf(masterMatches.get(i).woman);
+				if(meIndex < hisWifeIndex){
+					System.out.println("Unstable Matches Found: "+ masterMatches.get(i) +"\n and \n"+ testMansMatch );
+					test2Successful = false;
+				}
+			}
+		}
+		actorSystem.terminate();
+	}
+}
